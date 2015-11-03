@@ -1,4 +1,5 @@
--- Calico.lua
+-- Shiba.lua
+-- Based on Calico
 -- Experimental Lua & LuaSQL version
 -- Lua 5.1.5
 
@@ -50,24 +51,51 @@ function empty (t)
   end
 end
 
----- Main Table Object & pseudo global settings
-
-Calico = {}
-
----- Queue
-Calico.queue = {}
-
----- Commands
-Calico.commands = {}
-
--- Audio Related
-Calico.commands['stop'] = function (event, args)
-  if piepan.Audio.IsPlaying () then
-    piepan.Audio.Stop ()
+function reconnect()
+  if con then
+    con:close()
+    con = nil
   end
+  
+  con = assert ( db:connect(DB_NAME, DB_USER, DB_PASS) )
 end
 
-Calico.commands['volume'] = function (event, args)
+-- Does a SQL query with automatic reconnecting
+function doSqlQuery(q)
+  if con == nil then
+    reconnect()
+  end
+
+  local keepGoing = false
+  repeat
+    keepGoing = false
+    local result, err = con:execute(q)
+    if result == nil and err == "LuaSQL: error executing query. MySQL: MySQL server has gone away" then
+      print("Re-establishing MySQL connection")
+      reconnect()
+      keepGoing = true
+    elseif result ~= nil then
+      return result
+    else
+      error(err)
+    end
+  until not keepGoing
+  error("Left loop without returning")
+end
+
+---- Main Table Object & pseudo global settings
+
+Shiba = {}
+
+---- Queue
+Shiba.queue = {}
+
+---- Commands
+Shiba.commands = {}
+
+-- Audio Related
+
+Shiba.commands['volume'] = function (event, args)
   local vol = tonumber (args[1])
   local setting, percentage = true
 
@@ -85,7 +113,7 @@ Calico.commands['volume'] = function (event, args)
   piepan.Self.Channel.Send (percentage, false)
 end
 
-Calico.commands['find'] = function (event, args, offset)
+Shiba.commands['find'] = function (event, args, offset)
   local request, response, query, found
   local search = args[1]
   local offset = offset or 0
@@ -107,7 +135,7 @@ Calico.commands['find'] = function (event, args, offset)
     query = interp (query, qsubs)
   end
   
-  request = assert ( con:execute (query) )
+  request = assert ( doSqlQuery (query) )
   response = true
   
   while response do
@@ -128,28 +156,25 @@ Calico.commands['find'] = function (event, args, offset)
   if found then
     message = message..'</table>'
     event.Sender.Send (message)
-    Calico.commands['find'] (event, args, offset + 20)
+    Shiba.commands['find'] (event, args, offset + 20)
   else
     event.Sender.Send ('End of results.')
   end
 end
 
 -- Queue related
-Calico.commands['empty queue'] = function (event, args)
-  local count, grammar, response = #Calico.queue
-  
-  if count == 0 then
-    piepan.Self.Channel.Send ('Queue is already empty.', false)
-  else 
-    empty (Calico.queue)  
-    grammar = (count == 1) and 'entry' or 'entries'
-    response = interp ('Cleared ${c} ${g} from the queue.', {c = count, g = grammar})
-    piepan.Self.Channel.Send (response, false)
+Shiba.commands['shut up'] = function (event, args)
+  if piepan.Audio.IsPlaying () then
+    piepan.Audio.Stop ()
   end
+  local count, grammar, response = #Shiba.queue
+  
+  empty (Shiba.queue)  
+  piepan.Self.Channel.Send ("Okay, sorry. :(", false)
 end
 
-Calico.commands['list queue'] = function (event, args)
-  local count = #Calico.queue
+Shiba.commands['list queue'] = function (event, args)
+  local count = #Shiba.queue
   
   if count == 0 then
     piepan.Self.Channel.Send ('Queue is empty.', false)
@@ -159,7 +184,7 @@ Calico.commands['list queue'] = function (event, args)
   local text = (count == 1) and 'entry' or 'entries'
   local response = interp ('Queue has ${n} ${t}:', {n = count, t = text})
   
-  for _, v in ipairs (Calico.queue) do
+  for _, v in ipairs (Shiba.queue) do
     response = response..' ['..v..']'
   end
   
@@ -167,7 +192,7 @@ Calico.commands['list queue'] = function (event, args)
 end
 
 -- Movement related
-Calico.commands['move here'] = function (event, args)
+Shiba.commands['move here'] = function (event, args)
   local cur, des
   cur = piepan.Self.Channel.ID
   des = event.Sender.Channel.ID
@@ -177,30 +202,15 @@ Calico.commands['move here'] = function (event, args)
   end
 end
 
-Calico.commands['get out'] = function (event, args)
-  local room = tonumber (args[1] or AFK_ID)
-  
-  if room and piepan.Channels[room] then
-    piepan.Self.Move (piepan.Channels[room])
-  else
-    event.Sender.Send ('Channel does not exist.')
-  end
-end
-
-Calico.commands['get id'] = function (event, args)
+Shiba.commands['get id'] = function (event, args)
   local sender = event.Sender
   local id = sender.Channel.ID
   
   sender.Send (interp ('You are in channel ${c}.', {c = id}))
 end
 
-Calico.commands['leave now'] = function (event, args)
-  print ('Calico was asked to wait outside.')
-  piepan.Disconnect ()
-end
-
 -- Chat related
-Calico.commands['help'] = function (event, args)
+Shiba.commands['help'] = function (event, args)
   local sender = event.Sender
   local help = [[
   Help has arrived!
@@ -218,21 +228,18 @@ Calico.commands['help'] = function (event, args)
   Multiple commands can be sent in one message
   by splitting them up with a semi-colon ( <b>;</b> )<br />
   e.g., play this; say that; do something
-  <br /><hr /><br />
-  If you are getting no responses from the bot, first try the command 
-  <b>do reconnect</b>. This will attempt to restore the database connection.
   <br />
   ]]
   
   sender.Send (help)
 end
 
-Calico.commands['show'] = function (event, args)
+Shiba.commands['show'] = function (event, args)
   local cmds = {}
   local sender = event.Sender
   local response = 'Commands:'
   
-  for k in pairs (Calico.commands) do
+  for k in pairs (Shiba.commands) do
     cmds[#cmds+1] = k
   end
   
@@ -245,32 +252,63 @@ Calico.commands['show'] = function (event, args)
   sender.Send (response)
 end
 
-Calico.commands['echo'] = function (event, args)
+Shiba.commands['echo'] = function (event, args)
   for _, v in ipairs (args) do
-    piepan.Self.Channel.Send (v, false)
+    send(event, v, true)
   end
 end
 
 -- Database related
 
-Calico.commands['reconnect'] = function (event, args)
-  if con then
-    con:close()
-    con = nil
-  end
-  
-  con = assert ( db:connect(DB_NAME, DB_USER, DB_PASS) )
+Shiba.commands['reconnect'] = function (event, args)
+  reconnect()
   
   if con and event then
-    print ('Calico has found the ball of yarn.')
+    print ('Shiba has found the bone.')
     event.Sender.Send ('Database connection back online.')
+  end
+end
+
+function send(event, msg, forcePublic)
+  local public = false
+  for _, v in ipairs(event.Channels) do
+    v.Send(msg, false)
+    public = true
+  end
+  for _, v in ipairs(event.Trees) do
+    v.Send(msg, true)
+    public = true
+  end
+  if not public and not forcePublic then
+    event.Sender.Send(msg)
+  elseif forcePublic then
+    piepan.Self.Channel.Send(msg, false)
+  end
+end
+
+Shiba.commands['query'] = function(event, args)
+  if (event.Sender.Name == ADMIN_NAME) then
+    for _, v in ipairs(args) do
+      local result, err = con:execute(v);
+      if result ~= nil then
+        if type(result) == "number" then
+          send(event, 'Query OK, '..result..' rows affected.')
+        else
+          send(event, "Query OK.")
+        end
+      else
+        send(event, err)
+      end
+    end
+  else
+    send(event, 'No.')
   end
 end
 
 ---- Core funcionality
 
 -- Issue Command
-Calico.issueCommand = function (event, command)
+Shiba.issueCommand = function (event, command)
   local args = split (command, '+')
     
   for k, v in ipairs (args) do
@@ -279,20 +317,20 @@ Calico.issueCommand = function (event, command)
   
   local cmd = table.remove (args, 1)
   
-  if Calico.commands[cmd] then
-    Calico.commands[cmd] (event, args)
+  if Shiba.commands[cmd] then
+    Shiba.commands[cmd] (event, args)
   end
 end
 
 -- Talk Back
-Calico.talkBack = function (query)
+Shiba.talkBack = function (query)
   local request, response
   local dbtable = con:escape (TABLE_TEXT)
   local cmd = con:escape (query)
   local qsubs = {t = dbtable, c = cmd}
   local query = interp ('SELECT response FROM ${t} WHERE cmd = "${c}"', qsubs)
   
-  request = assert ( con:execute (query) )
+  request = assert ( doSqlQuery (query) )
   response = request:fetch ({})
   
   if response then
@@ -301,15 +339,17 @@ Calico.talkBack = function (query)
 end
 
 -- Get File Info
-Calico.getFileInfo = function (clip)
+Shiba.getFileInfo = function (clip)
   local request, response
   local assoc = {}
   local dbtable = con:escape (TABLE_AUDIO)
   local cmd = con:escape (clip)
   local qsubs = {t = dbtable, c = cmd}
-  local query = interp ('SELECT dir, filename, ext FROM ${t} WHERE cmd = "${c}"', qsubs)
+  -- I know ORDER BY RAND() is bad practice, but it's an easy patch to allow multiple
+  -- audio entries with the same command for random selection.
+  local query = interp ('SELECT dir, filename, ext FROM ${t} WHERE cmd = "${c}" ORDER BY RAND() LIMIT 1', qsubs)
   
-  request = assert ( con:execute (query) )
+  request = assert ( doSqlQuery (query) )
   response = request:fetch ({})
   
   if response then
@@ -324,18 +364,18 @@ Calico.getFileInfo = function (clip)
 end
 
 -- Play Audio
-Calico.playAudio = function (clip)
+Shiba.playAudio = function (clip)
   if piepan.Audio.IsPlaying () then
-    if #Calico.queue < 10 then
-      table.insert (Calico.queue, clip)
+    if #Shiba.queue < 10 then
+      table.insert (Shiba.queue, clip)
     end
     return
   end
   
-  local fileInfo, fpath = Calico.getFileInfo (clip)
+  local fileInfo, fpath = Shiba.getFileInfo (clip)
   
   if not fileInfo then
-    Calico.playNext ()
+    Shiba.playNext ()
     return
   end
   
@@ -347,16 +387,16 @@ Calico.playAudio = function (clip)
   }
   
   fpath = interp ('${d}/${s}/${f}.${e}', fsubs)
-  piepan.Audio.Play ( { filename = fpath, callback = Calico.playNext } )
+  piepan.Audio.Play ( { filename = fpath, callback = Shiba.playNext } )
 end
 
-Calico.playNext = function ()
-  local count = #Calico.queue
+Shiba.playNext = function ()
+  local count = #Shiba.queue
   local nextInLine
   
   if count > 0 then
-    nextInLine = table.remove (Calico.queue, 1)
-    Calico.playAudio (nextInLine)
+    nextInLine = table.remove (Shiba.queue, 1)
+    Shiba.playAudio (nextInLine)
   end
 end
 
@@ -366,12 +406,12 @@ end
 Splits message into multiparts
 Issue appropriate low level command per part
 --]]
-Calico.delegateMessage = function (event)
+Shiba.delegateMessage = function (event)
   if event.Sender == nil then
     return
   end
   
-  local msg = event.Message:lower ()
+  local msg = event.Message
   msg = compact (trim (msg))
     
   local cmds = split (msg, ';')
@@ -380,34 +420,30 @@ Calico.delegateMessage = function (event)
     v = trim (v)
     
     if v:sub (1, 2) == 'do' then
-      Calico.issueCommand (event, v:sub (4))
+      Shiba.issueCommand (event, v:sub (4))
     end
     
     if v:sub (1, 3) == 'say' then
-      Calico.talkBack (v:sub (5))
+      Shiba.talkBack (v:sub (5))
     end
     
     if v:sub (1, 4) == 'play' or
        v:sub (1, 4) == 'okay' then
-      Calico.playAudio (v:sub (6))
+      Shiba.playAudio (v:sub (6))
     end
-    
-    -- Help exceptions
-    if v == '?' then
-      Calico.commands['help'] (event)
-    end
+
   end
 end
 
-Calico.connected = function (event)
-  print ('Calico is purring.')
-  Calico.commands.reconnect ()
+Shiba.connected = function (event)
+  print ('Shiba is barking.')
+  Shiba.commands.reconnect ()
   piepan.Audio.SetVolume (0.5)
-  piepan.Self.SetComment ('I\'m a bot! Type <b>?</b> for help on how to use me.')
+  piepan.Self.SetComment ('I\'m a bot! Type <b>do help</b> for help on how to use me.')
   piepan.Self.Move (piepan.Channels[3])
 end
 
 ---- Events
 
-piepan.On ('connect', Calico.connected)
-piepan.On ('message', Calico.delegateMessage)
+piepan.On ('connect', Shiba.connected)
+piepan.On ('message', Shiba.delegateMessage)

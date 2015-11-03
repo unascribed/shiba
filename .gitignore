@@ -1,4 +1,5 @@
 audio/
 bin/
-calico.sh
+shiba.sh
 piepan
+*.pem
