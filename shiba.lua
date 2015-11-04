@@ -9,6 +9,7 @@ require 'bin/conf'
 driver = require 'luasql.mysql'
 db = driver.mysql ()
 con = nil
+recentMessages = {}
 
 ---- Helper Functions
 
@@ -412,8 +413,28 @@ Shiba.delegateMessage = function (event)
   end
   
   local msg = event.Message
-  msg = compact (trim (msg))
-    
+  msg = trim(msg)
+  if msg:sub(1, 2) == 's/' then
+    local s = split(msg, '/')
+    local needle = s[2]
+    local replacement = s[3]
+    for i=#recentMessages,1,-1 do
+      local v = recentMessages[i]
+      if string.find(v.text, needle, 1, true) then
+        v.text = string.gsub(v.text, needle, replacement)
+        send(event, "Correction, "..v.sender..": "..v.text);
+        return
+      end
+    end
+    send(event, "Can't find anything to correct.")
+    return
+  end
+  if #recentMessages > 20 then
+    table.remove(recentMessages, 1)
+  end
+  table.insert(recentMessages, {text=event.Message, sender=event.Sender.Name})
+  msg = compact(msg)
+
   local cmds = split (msg, ';')
   
   for _, v in ipairs (cmds) do
