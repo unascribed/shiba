@@ -105,6 +105,7 @@ Shiba has three main commands: **do**, **say**, and **play**. Multiple commands 
 
 ##### Database
 * `reconnect` - The reconnect command will attempt to refresh Shiba's connection to the SQL server. If you find Shiba unresponsive to `say` / `play` commands, or database related `do` commands, try this first. Notifies the sender if successful.
+* `query` - Executes an arbitrary query against the database. Requires the sender to be the one defined in the config as ADMIN_NAME.
 
 
 #### say
@@ -114,6 +115,12 @@ The `say` command tries  to match everything that follows it against entries in 
 The `play` command tries to match everything that follows it against entries in the database's `audio_table`. If the string matches a `cmd` column Shiba will attempt to play the associated audio file from disk.
 
 If audio is already playing the audio clip will be added to the end the of queue. After an audio clip is finished playing Shiba will immediately play the next clip in the queue, if one exists.
+
+#### grep
+The `grep` command will return all messages in the last 50 that were sent by the given user. This is useful for filtering out noise when someone goes on a stream-of-conciousness rant about something, while others are discussing something.
+
+#### recall (if running archiver.js)
+The `recall` command will send an image that has been archived by archiver.js. The first argument is the filename.
 
 ## Issues
 
